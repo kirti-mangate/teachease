@@ -1,0 +1,129 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a teacher in the system.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["teacher", "student"] },
+        "department": { "type": "string" },
+        "subject": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Detailed student profile including biometric data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "enrollmentNumber": { "type": "string" },
+        "year": { "type": "string" },
+        "branch": { "type": "string" },
+        "faceDescriptor": { "type": "array", "description": "Float32Array of facial features" },
+        "voiceSampleUrl": { "type": "string" },
+        "photoUrl": { "type": "string" }
+      },
+      "required": ["uid", "name", "enrollmentNumber"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily attendance record.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["present", "absent"] },
+        "teacherId": { "type": "string" },
+        "subject": { "type": "string" },
+        "method": { "type": "string", "enum": ["manual", "ai"] }
+      },
+      "required": ["studentName", "date", "status", "teacherId"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Generated assignment content.",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "topic": { "type": "string" },
+        "subject": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherId", "topic", "subject", "content"]
+    },
+    "LessonPlan": {
+      "title": "Lesson Plan",
+      "description": "Generated lesson plan content.",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "topic": { "type": "string" },
+        "subject": { "type": "string" },
+        "classLevel": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherId", "topic", "subject", "content"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "Generated study notes.",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "topic": { "type": "string" },
+        "subject": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherId", "topic", "content"]
+    },
+    "PPTContent": {
+      "title": "PPT Content",
+      "description": "Slide-wise content for presentations.",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "topic": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherId", "topic", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Teacher and admin profiles."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Collection of attendance records."
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Biometric and academic student data."
+    },
+    "/assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Collection of generated assignments."
+    },
+    "/notes/{noteId}": {
+      "schema": "Note",
+      "description": "Collection of generated study notes."
+    },
+    "/ppt_content/{pptId}": {
+      "schema": "PPTContent",
+      "description": "Collection of generated PPT structures."
+    }
+  }
+}

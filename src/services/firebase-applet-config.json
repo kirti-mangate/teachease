@@ -1,0 +1,8 @@
+const firebaseConfig = {
+  apiKey: "AIzaSyAlhDE8SnhZrv8OmsI3fDP_o5RPYbyIBfQ",
+  authDomain: "teachease-9062a.firebaseapp.com",
+  projectId: "teachease-9062a",
+  storageBucket: "teachease-9062a.firebasestorage.app",
+  messagingSenderId: "307110327817",
+  appId: "1:307110327817:web:2722a35ea6d58485136ad8"
+};
