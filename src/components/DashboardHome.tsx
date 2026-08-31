@@ -1,86 +1,192 @@
-import React from "react";
-import { UserProfile } from "../services/storageService";
-import { LayoutDashboard, UserCheck, FileText, BookOpen, StickyNote, Presentation, ArrowRight } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { storage, UserProfile } from "../services/storageService";
+import { 
+  LayoutDashboard, 
+  UserCheck, 
+  FileText, 
+  BookOpen, 
+  StickyNote, 
+  Presentation, 
+  ArrowRight, 
+  Users, 
+  Key, 
+  Sparkles,
+  ShieldCheck
+} from "lucide-react";
 import { motion } from "motion/react";
 
 interface DashboardHomeProps {
   user: UserProfile;
   onNavigate: (module: any) => void;
+  onOpenSettings?: () => void;
 }
 
-const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }) => {
-  const stats = [
-    { label: "Today's Attendance", value: "94.2%", change: "+2% from yesterday" },
-    { label: "AI Content Generated", value: "24", change: "Across all tools" },
-    { label: "Tasks Today", value: "12", change: "Active across modules" },
-  ];
+export const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate, onOpenSettings }) => {
+  const [studentCount, setStudentCount] = useState(0);
+  const [contentCount, setContentCount] = useState(0);
+  const [attendanceCount, setAttendanceCount] = useState(0);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  useEffect(() => {
+    const students = storage.getStudents();
+    setStudentCount(students.length);
+
+    const content = storage.getContent(undefined, user.uid);
+    setContentCount(content.length);
+
+    const attendance = storage.getAttendance().filter(a => a.teacherId === user.uid);
+    setAttendanceCount(attendance.length);
+
+    const key = storage.getTeacherApiKey(user.uid) || import.meta.env.VITE_GEMINI_API_KEY;
+    setHasApiKey(Boolean(key && key.trim()));
+  }, [user]);
 
   const quickTools = [
-    { id: "attendance", label: "Attendance Tracker", icon: UserCheck, desc: "Mark attendance and auto-gen reports.", color: "bg-emerald-500/20 text-emerald-400" },
-    { id: "assignments", label: "Assignment Gen", icon: FileText, desc: "Generate topic-based homework.", color: "bg-orange-500/20 text-orange-400" },
-    { id: "ppt", label: "PPT Creator", icon: Presentation, desc: "AI-structured presentation outlines.", color: "bg-pink-500/20 text-pink-400" },
-    { id: "notes", label: "Note Summarizer", icon: StickyNote, desc: "Turn topics into scannable notes.", color: "bg-sky-500/20 text-sky-400" },
+    { 
+      id: "attendance", 
+      label: "Smart Attendance", 
+      icon: UserCheck, 
+      desc: "Group photo face detection & recognition.", 
+      color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" 
+    },
+    { 
+      id: "students", 
+      label: "Student Directory", 
+      icon: Users, 
+      desc: "Register students & facial embeddings.", 
+      color: "bg-purple-500/20 text-purple-400 border-purple-500/30" 
+    },
+    { 
+      id: "assignments", 
+      label: "AI Assignments", 
+      icon: FileText, 
+      desc: "Structured problem sets & rubrics.", 
+      color: "bg-orange-500/20 text-orange-400 border-orange-500/30" 
+    },
+    { 
+      id: "notes", 
+      label: "Lecture Notes", 
+      icon: StickyNote, 
+      desc: "High-yield academic study notes.", 
+      color: "bg-sky-500/20 text-sky-400 border-sky-500/30" 
+    },
+    { 
+      id: "ppt", 
+      label: "PPT Content", 
+      icon: Presentation, 
+      desc: "Slide-by-slide lecture presentation content.", 
+      color: "bg-pink-500/20 text-pink-400 border-pink-500/30" 
+    },
   ];
 
   return (
     <div className="space-y-10">
-      {/* Quick AI Command / Search Bar Equivalent */}
-      <section className="glass-card p-10 border-indigo-500/30 bg-indigo-500/5 relative overflow-hidden">
-        <div className="relative z-10">
-           <div className="flex justify-between items-center mb-6 text-xs font-bold uppercase tracking-widest text-indigo-300">
-            <span className="flex items-center gap-2">✨ Quick AI Generator</span>
-            <span className="opacity-40">System Active</span>
+      {/* BYOK Status Banner */}
+      <div className="glass-card p-6 border-indigo-500/30 bg-indigo-500/5 relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-4 relative z-10">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30 shrink-0">
+            <Key size={22} />
           </div>
-          <div className="relative">
-            <input 
-              type="text" 
-              placeholder="e.g. Generate a Grade 10 assignment on Photosynthesis..." 
-              className="w-full bg-black/40 border border-white/10 rounded-2xl p-6 text-xl focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 transition-all placeholder:text-white/20"
-            />
-            <button className="absolute right-3 top-3 bottom-3 px-10 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-bold text-sm transition-all shadow-[0_0_20px_rgba(99,102,241,0.4)] active:scale-95">
-              Generate
-            </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-base text-white">Bring Your Own Key (BYOK) AI Engine</h3>
+              {hasApiKey ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Active
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> Key Required
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-white/50 mt-0.5">
+              {hasApiKey
+                ? "Your personal Gemini API key is configured and ready for generation."
+                : "Configure your free Google Gemini API key to enable assignment, notes, and slide generation."}
+            </p>
           </div>
         </div>
-        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-400/5 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/4" />
-      </section>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {stats.map((stat, i) => (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: i * 0.1 }}
-            key={stat.label} 
-            className="glass-card p-8 flex flex-col"
-          >
-            <p className="text-[10px] uppercase font-bold tracking-widest text-white/40">{stat.label}</p>
-            <h3 className="text-4xl font-extrabold mt-2 text-indigo-400 leading-none">{stat.value}</h3>
-            <p className="text-[10px] text-white/40 mt-3">{stat.change}</p>
-          </motion.div>
-        ))}
+        <button
+          onClick={onOpenSettings}
+          className="px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold transition-all shadow-lg shadow-indigo-500/25 shrink-0 active:scale-95"
+        >
+          {hasApiKey ? "Manage AI Key" : "Configure API Key"}
+        </button>
       </div>
 
-      {/* Quick Tools */}
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.1 }}
+          className="glass-card p-6 flex flex-col justify-between"
+        >
+          <div>
+            <p className="text-[10px] uppercase font-bold tracking-widest text-white/40">Registered Students</p>
+            <h3 className="text-3xl font-extrabold mt-2 text-indigo-400">{studentCount}</h3>
+          </div>
+          <p className="text-[11px] text-white/40 mt-3 flex items-center gap-1.5">
+            <Users size={13} className="text-indigo-400" /> Enrolled for Attendance
+          </p>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.15 }}
+          className="glass-card p-6 flex flex-col justify-between"
+        >
+          <div>
+            <p className="text-[10px] uppercase font-bold tracking-widest text-white/40">Attendance Logs</p>
+            <h3 className="text-3xl font-extrabold mt-2 text-emerald-400">{attendanceCount}</h3>
+          </div>
+          <p className="text-[11px] text-white/40 mt-3 flex items-center gap-1.5">
+            <UserCheck size={13} className="text-emerald-400" /> Stored in Supabase
+          </p>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.2 }}
+          className="glass-card p-6 flex flex-col justify-between"
+        >
+          <div>
+            <p className="text-[10px] uppercase font-bold tracking-widest text-white/40">AI Content Generated</p>
+            <h3 className="text-3xl font-extrabold mt-2 text-orange-400">{contentCount}</h3>
+          </div>
+          <p className="text-[11px] text-white/40 mt-3 flex items-center gap-1.5">
+            <Sparkles size={13} className="text-orange-400" /> Assignments, Notes & Slides
+          </p>
+        </motion.div>
+      </div>
+
+      {/* Interactive Teaching Modules Grid */}
       <div>
-        <h2 className="text-xs uppercase font-bold tracking-[0.4em] mb-8 opacity-40">Interactive Modules</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <h2 className="text-xs uppercase font-bold tracking-[0.3em] mb-6 text-white/40">
+          Core Academic Tools
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {quickTools.map((tool, i) => (
             <motion.button
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 + 0.3 }}
+              transition={{ delay: i * 0.05 + 0.2 }}
               key={tool.id}
               onClick={() => onNavigate(tool.id)}
-              className="group glass-card p-8 text-left hover:bg-white/5 transition-all hover:-translate-y-1"
+              className="group glass-card p-6 text-left hover:bg-white/5 transition-all hover:-translate-y-1 border border-white/5 flex flex-col justify-between"
             >
-              <div className={`w-14 h-14 ${tool.color} rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform`}>
-                <tool.icon size={28} />
+              <div>
+                <div className={`w-12 h-12 ${tool.color} rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform border`}>
+                  <tool.icon size={24} />
+                </div>
+                <h3 className="font-bold text-lg mb-2 text-white">{tool.label}</h3>
+                <p className="text-xs text-white/50 leading-relaxed">{tool.desc}</p>
               </div>
-              <h3 className="font-bold text-xl mb-3">{tool.label}</h3>
-              <p className="text-xs text-white/50 leading-relaxed">{tool.desc}</p>
-              <div className="mt-8 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="mt-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
                 Launch Module <ArrowRight size={14} />
               </div>
             </motion.button>
@@ -90,5 +196,4 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ user, onNavigate }) => {
     </div>
   );
 };
-
 export default DashboardHome;
