@@ -1,72 +1,220 @@
 import { GoogleGenAI } from "@google/genai";
-import { storage } from "./storageService";
+import { apiService } from "./apiService";
 
 /**
- * Resolves the Gemini API key following the Bring Your Own Key (BYOK) paradigm.
- * Order of precedence:
- * 1. Provided explicit key in arguments
- * 2. Teacher-specific stored key in current session / user profile
- * 3. Environment variable fallback (VITE_GEMINI_API_KEY)
+ * Resolves the centralized Gemini API key from environment variables.
+ * Precedence:
+ * 1. Vite frontend env variable: import.meta.env.VITE_GEMINI_API_KEY or import.meta.env.GEMINI_API_KEY
+ * 2. Node.js backend env variables: process.env.VITE_GEMINI_API_KEY or process.env.GEMINI_API_KEY
  */
-export const resolveGeminiApiKey = (teacherId?: string, explicitKey?: string): string => {
-  if (explicitKey && explicitKey.trim()) {
-    return explicitKey.trim();
-  }
-  if (teacherId) {
-    const teacherKey = storage.getTeacherApiKey(teacherId);
-    if (teacherKey && teacherKey.trim()) {
-      return teacherKey.trim();
+export const getGeminiApiKey = (): string => {
+  // 1. Direct Vite compile-time literal access (Vite replaces `import.meta.env.VITE_` at build time)
+  try {
+    const directViteKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (directViteKey && typeof directViteKey === "string" && directViteKey.trim()) {
+      return directViteKey.trim().replace(/^['"]|['"]$/g, "");
     }
+  } catch {
+    // ignore
   }
-  const envKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (envKey && envKey.trim()) {
-    return envKey.trim();
+
+  // 2. Fallback to GEMINI_API_KEY if defined
+  try {
+    const directAltKey = (import.meta.env as any).GEMINI_API_KEY;
+    if (directAltKey && typeof directAltKey === "string" && directAltKey.trim()) {
+      return directAltKey.trim().replace(/^['"]|['"]$/g, "");
+    }
+  } catch {
+    // ignore
   }
+
+  // 3. Node.js backend env variables: process.env.VITE_GEMINI_API_KEY or process.env.GEMINI_API_KEY
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      const processKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      if (processKey && typeof processKey === "string" && processKey.trim()) {
+        return processKey.trim().replace(/^['"]|['"]$/g, "");
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   return "";
 };
 
-export const getAIClient = (teacherId?: string, explicitKey?: string): GoogleGenAI => {
-  const apiKey = resolveGeminiApiKey(teacherId, explicitKey);
+/**
+ * Masked helper for logging key status safely without exposing secrets.
+ */
+export const getMaskedApiKey = (key: string): string => {
+  if (!key) return "None";
+  if (key.length <= 8) return "********";
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+};
+
+/**
+ * Returns an instance of GoogleGenAI initialized with the centralized API key.
+ */
+export const getAIClient = (): GoogleGenAI => {
+  const apiKey = getGeminiApiKey();
   if (!apiKey) {
-    throw new Error("Gemini API Key is not set. Please configure your API key in AI Settings.");
+    throw new Error("Gemini API Key is not set. Please configure VITE_GEMINI_API_KEY in your .env file.");
   }
   return new GoogleGenAI({ apiKey });
 };
 
 /**
- * FR-21: API Key Validation
- * Tests whether the entered API key is valid by issuing a lightweight test query.
+ * Helper to determine if an error is a transient gateway / proxy / overload error
+ * such as 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout, or network drop.
  */
-export const testGeminiApiKey = async (apiKey: string): Promise<{ valid: boolean; message: string }> => {
-  if (!apiKey || !apiKey.trim()) {
-    return { valid: false, message: "API key cannot be empty." };
+export const isTransientOrGatewayError = (err: any): boolean => {
+  if (!err) return false;
+  const status = Number(err.status || err.code || err.statusCode || 0);
+  if (status === 502 || status === 503 || status === 504 || status === 429) {
+    return true;
   }
-  try {
-    const client = new GoogleGenAI({ apiKey: apiKey.trim() });
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: "Reply with 'OK' to verify API connectivity.",
-      config: {
-        maxOutputTokens: 10,
-        temperature: 0.1
-      }
-    });
+  const msg = (err.message || String(err)).toLowerCase();
+  return (
+    msg.includes("502") ||
+    msg.includes("bad gateway") ||
+    msg.includes("503") ||
+    msg.includes("service unavailable") ||
+    msg.includes("504") ||
+    msg.includes("gateway timeout") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("load failed") ||
+    msg.includes("econnreset") ||
+    msg.includes("etimedout")
+  );
+};
 
-    if (response && response.text) {
-      return { valid: true, message: "API Key validated successfully! Connected to Google Gemini." };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export interface PromptExecutionOptions {
+  model?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}
+
+/**
+ * Executes a Gemini prompt with multi-tier resilience:
+ * 1. Centralized API key from environment variables.
+ * 2. Model cascade fallback (gemini-3-flash-preview -> gemini-3.8-flash -> gemini-2.0-flash).
+ * 3. Exponential backoff retry on transient gateway dropouts / 502 Bad Gateway.
+ * 4. Node.js server proxy fallback (/api/ai/generate) if direct browser network is blocked or key is server-only.
+ */
+export const executeGeminiPrompt = async (
+  prompt: string,
+  options: PromptExecutionOptions = {}
+): Promise<string> => {
+  const apiKey = getGeminiApiKey();
+  const { temperature = 0.7, maxOutputTokens, model = "gemini-3-flash-preview" } = options;
+
+  // Primary model is gemini-3-flash-preview (fastest, active on Google AI Studio) with gemini-3.8-flash fallback
+  const requestedModel = (!model || model.includes("2.5") || model.includes("2.0") || model.includes("1.5"))
+    ? "gemini-3-flash-preview"
+    : model;
+  const modelsToTry: string[] = [requestedModel, "gemini-3-flash-preview", "gemini-3.8-flash"].filter(
+    (m, idx, arr) => arr.indexOf(m) === idx
+  );
+
+  let lastError: any = null;
+
+  // Tier 1: Direct browser client call if client API key is available
+  if (apiKey) {
+    const client = new GoogleGenAI({ apiKey });
+
+    for (const currentModel of modelsToTry) {
+      const maxAttempts = 2;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const response = await client.models.generateContent({
+            model: currentModel,
+            contents: prompt,
+            config: {
+              temperature,
+              ...(maxOutputTokens ? { maxOutputTokens } : {})
+            }
+          });
+
+          if (response && response.text) {
+            return response.text;
+          }
+        } catch (err: any) {
+          lastError = err;
+          const msg = (err?.message || String(err)).toLowerCase();
+
+          // If auth issue, break directly to backend proxy
+          if (
+            msg.includes("api_key_invalid") ||
+            msg.includes("401") ||
+            msg.includes("403") ||
+            msg.includes("unauthorized") ||
+            msg.includes("permission_denied")
+          ) {
+            console.warn("[TeachEase AI] Direct API key authorization failed, trying backend proxy...");
+            break;
+          }
+
+          // If it's a 502 Bad Gateway / transient error, retry with delay
+          if (isTransientOrGatewayError(err) && attempt < maxAttempts) {
+            console.warn(`[TeachEase AI] Transient error on ${currentModel} (attempt ${attempt}/${maxAttempts}). Retrying in ${attempt * 1000}ms...`);
+            await sleep(attempt * 1000);
+            continue;
+          }
+
+          break;
+        }
+      }
     }
-    return { valid: false, message: "No response received from Gemini API." };
-  } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    if (errorMsg.includes("API_KEY_INVALID") || errorMsg.includes("400") || errorMsg.includes("403")) {
-      return { valid: false, message: "Invalid API key or unauthorized. Please check your key from Google AI Studio." };
-    }
-    return { valid: false, message: `Validation failed: ${errorMsg}` };
   }
+
+  // Tier 2: Backend server proxy fallback via apiService (resolves CORS, browser restrictions, and uses server-side .env on Render/Vercel)
+  try {
+    const serverResult = await apiService.generateAI(prompt, requestedModel, {
+      temperature,
+      maxOutputTokens,
+      apiKey: apiKey || undefined,
+    });
+    if (serverResult && serverResult.text) {
+      return serverResult.text;
+    }
+  } catch (proxyErr: any) {
+    if (!lastError) {
+      lastError = proxyErr;
+    }
+  }
+
+  // Format a clear error message
+  const rawMsg = lastError?.message || String(lastError || "");
+  const lowerMsg = rawMsg.toLowerCase();
+
+  if (!apiKey && (!rawMsg || lowerMsg.includes("failed to fetch") || lowerMsg.includes("not found"))) {
+    throw new Error(
+      "Gemini API Key is not configured. For localhost, verify VITE_GEMINI_API_KEY in your .env file. For Vercel or Render, add VITE_GEMINI_API_KEY in your project Environment Variables and redeploy."
+    );
+  }
+
+  if (lowerMsg.includes("api_key_invalid") || lowerMsg.includes("invalid api key") || lowerMsg.includes("401") || lowerMsg.includes("403")) {
+    throw new Error("Invalid Gemini API key or unauthorized. Please verify your VITE_GEMINI_API_KEY in .env / platform settings.");
+  }
+
+  if (lowerMsg.includes("quota") || lowerMsg.includes("429") || lowerMsg.includes("resource_exhausted")) {
+    throw new Error("Gemini API quota exceeded. Please check your Google AI Studio account quota or try again in a few moments.");
+  }
+
+  if (isTransientOrGatewayError(lastError)) {
+    throw new Error(
+      "Google Gemini Gateway (502 Bad Gateway): Google's model servers are temporarily experiencing high traffic. Please retry in a few moments."
+    );
+  }
+
+  throw new Error(rawMsg || "AI content generation failed. Please check your internet connection and verify VITE_GEMINI_API_KEY in .env.");
 };
 
 /**
- * FR-11 & FR-12: AI Assignment Generation
+ * AI Assignment Generation
  */
 export interface AssignmentOptions {
   subject: string;
@@ -74,12 +222,25 @@ export interface AssignmentOptions {
   difficulty: string;
   questionCount?: number;
   questionTypes?: string;
-  teacherId?: string;
 }
 
-export const generateAssignment = async (options: AssignmentOptions): Promise<string> => {
-  const { subject, topic, difficulty, questionCount = 5, questionTypes = "Mixed (MCQ, Short, Long)", teacherId } = options;
-  const ai = getAIClient(teacherId);
+export const generateAssignment = async (
+  optionsOrSubject: AssignmentOptions | string,
+  topicParam?: string,
+  difficultyParam?: string
+): Promise<string> => {
+  const options: AssignmentOptions =
+    typeof optionsOrSubject === "string"
+      ? {
+        subject: optionsOrSubject,
+        topic: topicParam || "",
+        difficulty: difficultyParam || "Medium",
+        questionCount: 5,
+        questionTypes: "Mixed (MCQ, Short, Challenge)"
+      }
+      : optionsOrSubject;
+
+  const { subject, topic, difficulty, questionCount = 5, questionTypes = "Mixed (MCQ, Short, Challenge)" } = options;
 
   const prompt = `You are an expert university professor and curriculum developer.
 Generate an academic assignment for:
@@ -96,94 +257,122 @@ Requirements:
 4. Include a concise "Grading Rubric / Answer Hints" section at the end for the professor's reference.
 5. Format beautifully in standard Markdown with clean tables, headings, and bold emphasis.`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      temperature: 0.7,
-    }
+  return executeGeminiPrompt(prompt, {
+    temperature: 0.7
   });
-  return response.text || "";
 };
 
 /**
- * FR-14 & FR-15: AI Notes Generation
+ * AI Lesson Plan Generation
+ */
+export const generateLessonPlan = async (subject: string, topic: string, classLevel: string): Promise<string> => {
+  const prompt = `Create a lesson plan for subject "${subject}", topic "${topic}", for class level "${classLevel}". 
+Include:
+- Learning Objectives
+- Required Materials
+- Introduction (5 mins)
+- Core Activities (30 mins)
+- Conclusion/Assessment (10 mins)
+Format as Markdown.`;
+
+  return executeGeminiPrompt(prompt, {
+    temperature: 0.7
+  });
+};
+
+/**
+ * AI Lecture Notes Generation
  */
 export interface NotesOptions {
   subject: string;
   topic: string;
-  detailLevel?: string;
-  teacherId?: string;
+  detailLevel: string;
 }
 
-export const generateNotes = async (options: NotesOptions): Promise<string> => {
-  const { subject, topic, detailLevel = "Comprehensive Lecture Notes", teacherId } = options;
-  const ai = getAIClient(teacherId);
+export const generateLectureNotes = async (
+  optionsOrSubject: NotesOptions | string,
+  topicParam?: string,
+  detailLevelParam?: string
+): Promise<string> => {
+  const options: NotesOptions =
+    typeof optionsOrSubject === "string"
+      ? {
+        subject: optionsOrSubject,
+        topic: topicParam || "",
+        detailLevel: detailLevelParam || "Comprehensive"
+      }
+      : optionsOrSubject;
 
-  const prompt = `You are a distinguished university professor lecturing on "${subject}".
-Create structured, high-yield academic lecture notes on the topic: "${topic}".
-Notes Format & Depth: ${detailLevel}
+  const { subject, topic, detailLevel } = options;
 
-Structure the lecture notes with:
-# [Topic Title] - Academic Lecture Notes
-## 1. Learning Objectives & Overview
-## 2. Fundamental Concepts & Key Terminology (include clear definitions)
-## 3. Detailed Explanations & Theoretical Mechanisms
-## 4. Real-World Applications & Industry Case Examples
-## 5. Critical Takeaways & High-Yield Summary (quick bullet points)
-## 6. Self-Assessment Questions & Further Reading
+  const prompt = `You are a distinguished university professor delivering an in-depth academic lecture.
+Generate comprehensive lecture notes for:
+- Course Subject: ${subject}
+- Lecture Topic: ${topic}
+- Detail Level: ${detailLevel}
 
-Ensure academic rigor, clarity, and format using clean Markdown with bolding, lists, and callout sections.`;
+Requirements:
+1. Executive Summary & Learning Outcomes
+2. Theoretical Foundations & Key Definitions
+3. Core Mechanisms, Algorithms, or Equations (with step-by-step mathematical or logical walkthroughs)
+4. Real-world Engineering/Industry Case Studies & Applications
+5. Comparative Analysis Table (e.g., Trade-offs, Strengths vs. Weaknesses)
+6. Professor's "Gotchas & Exam Tips" (Common misconceptions students make)
+7. Summary Key Takeaways and 3 Discussion Questions
+8. Format in clean, readable Markdown with LaTeX-style notation where appropriate and bullet lists.`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      temperature: 0.7,
-    }
+  return executeGeminiPrompt(prompt, {
+    temperature: 0.6
   });
-  return response.text || "";
 };
 
 /**
- * FR-17 & FR-18: AI PPT Content Generation
+ * AI Presentation / PPT Outline Generation
  */
 export interface PPTOptions {
   subject: string;
   topic: string;
   slideCount?: number;
   detailLevel?: string;
-  teacherId?: string;
 }
 
-export const generatePPTContent = async (options: PPTOptions): Promise<string> => {
-  const { subject, topic, slideCount = 6, detailLevel = "Detailed Academic Lecture", teacherId } = options;
-  const ai = getAIClient(teacherId);
+export const generatePPTOptions = async (
+  optionsOrSubject: PPTOptions | string,
+  topicParam?: string,
+  slideCountParam?: number
+): Promise<string> => {
+  const options: PPTOptions =
+    typeof optionsOrSubject === "string"
+      ? {
+        subject: optionsOrSubject,
+        topic: topicParam || "",
+        slideCount: slideCountParam || 6,
+        detailLevel: "Detailed"
+      }
+      : optionsOrSubject;
+
+  const { subject, topic, slideCount = 6 } = options;
 
   const prompt = `You are an expert academic presentation designer.
-Generate structured, slide-by-slide presentation content for a lecture on:
-- Subject: ${subject || "General"}
-- Topic: "${topic}"
-- Number of Slides: ${slideCount}
-- Presentation Depth: ${detailLevel}
+Create a slide-by-slide presentation outline for:
+- Subject: ${subject}
+- Topic: ${topic}
+- Total Slides: ${slideCount}
 
-For each of the ${slideCount} slides, strictly use this format:
+For EVERY slide (Slide 1 to Slide ${slideCount}), strictly provide:
+### Slide [Number]: [Catchy Slide Title]
+- **Key Concepts:** (3-4 crisp bullet points suitable for on-slide text)
+- **Visual Suggestion:** (Describe an infographic, chart, diagram, or illustration to include)
+- **Speaker Notes:** (2-3 sentences of what the professor should explain verbally)
 
-### Slide [Number]: [Slide Title]
-**Slide Purpose / Goal:** [Brief objective]
-- **Main Point 1:** [Clear bullet point explanation]
-- **Main Point 2:** [Clear bullet point explanation]
-- **Supporting Detail / Example:** [Concrete example, statistic, or diagram idea]
-*Speaker Notes for Professor:* [1-2 sentences of spoken guidance]
+Format cleanly in Markdown with dividers (---) between each slide.`;
 
-Ensure Slide 1 is the Title/Agenda slide and the final slide is the Summary/Q&A slide. Format in clean Markdown.`;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      temperature: 0.7,
-    }
+  return executeGeminiPrompt(prompt, {
+    temperature: 0.7
   });
-  return response.text || "";
 };
+
+// Aliases for compatibility with different module imports
+export const generateNotes = generateLectureNotes;
+export const generatePPTContent = generatePPTOptions;
+

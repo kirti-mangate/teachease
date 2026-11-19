@@ -7,7 +7,6 @@ import {
   Copy, 
   RefreshCw, 
   History, 
-  Key, 
   Check, 
   Trash2, 
   AlertCircle,
@@ -16,7 +15,6 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { storage, UserProfile, AIContent } from "../services/storageService";
-import { AISettingsModal } from "./AISettingsModal";
 
 interface NotesModuleProps {
   user: UserProfile;
@@ -32,7 +30,6 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState<AIContent[]>([]);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<AIContent | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
 
   useEffect(() => {
@@ -55,8 +52,7 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
       const content = await generateNotes({
         subject: subject.trim() || "General Engineering",
         topic: topic.trim(),
-        detailLevel,
-        teacherId: user.uid
+        detailLevel
       });
 
       const output = content || "Failed to generate notes.";
@@ -78,12 +74,7 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
       loadHistory();
     } catch (err: any) {
       console.error("Notes generation failed:", err);
-      const msg = err?.message || String(err);
-      if (msg.includes("Gemini API Key") || msg.includes("API key")) {
-        setApiKeyError("Your Gemini API Key is missing or invalid. Please configure it in AI Settings (BYOK).");
-      } else {
-        setApiKeyError(`Generation error: ${msg}`);
-      }
+      setApiKeyError(err?.message || "Failed to generate lecture notes. Please verify your connection.");
     } finally {
       setLoading(false);
     }
@@ -128,7 +119,7 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
             AI Lecture Notes Generator
           </h2>
           <p className="text-xs text-white/50 mt-1">
-            Generate high-yield, structured academic lecture notes using your Gemini key (FR-14 - FR-16)
+            Generate high-yield, structured academic lecture notes with Gemini AI (FR-14 - FR-16)
           </p>
         </div>
 
@@ -140,29 +131,28 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
             <History size={14} className="text-sky-400" />
             Previous Notes ({historyList.length})
           </button>
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-white/80 hover:text-white flex items-center gap-2 transition-all"
-          >
-            <Key size={14} className="text-indigo-400" />
-            AI Key Settings
-          </button>
         </div>
       </div>
 
-      {/* API Key Missing Alert Banner */}
+      {/* API Key Missing / Gateway Alert Banner */}
       {apiKeyError && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-3 text-xs text-rose-300">
-          <div className="flex items-center gap-2">
-            <AlertCircle size={18} className="shrink-0" />
-            <span>{apiKeyError}</span>
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-300">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle size={18} className="shrink-0 mt-0.5 text-rose-400" />
+            <div>
+              <p className="font-semibold text-white">Generation Notice</p>
+              <p className="mt-0.5 opacity-90 leading-relaxed">{apiKeyError}</p>
+            </div>
           </div>
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className="px-3 py-1.5 rounded-lg bg-rose-500 text-white font-bold text-xs shrink-0 hover:bg-rose-400 transition-colors"
-          >
-            Configure API Key
-          </button>
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+            <button
+              onClick={handleGenerate}
+              className="px-3.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 transition-colors"
+            >
+              <RefreshCw size={13} />
+              Retry
+            </button>
+          </div>
         </div>
       )}
 
@@ -357,16 +347,6 @@ export const NotesModule: React.FC<NotesModuleProps> = ({ user }) => {
           </div>
         </div>
       </div>
-
-      {/* BYOK Settings Modal */}
-      <AISettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        teacherId={user.uid}
-        onKeyUpdated={(hasKey) => {
-          if (hasKey) setApiKeyError("");
-        }}
-      />
     </div>
   );
 };
